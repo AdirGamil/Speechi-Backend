@@ -1,0 +1,535 @@
+# Process Documentation
+
+## System Overview
+
+The backend is a FastAPI application that implements a two-stage AI pipeline: **audio → transcription (Whisper) → summarization (Claude) → structured JSON**. The API exposes:
+
+- `GET /api/health` — Liveness check
+- `GET /api/supported-formats` — List of supported audio formats
+- `POST /api/process-meeting` — JSON response (transcript + analysis)
+- `POST /api/process-meeting/export-docx` — Word document download
+- `POST /api/process-meeting/export-pdf` — PDF document download
+
+All process-meeting endpoints accept an audio upload and an optional **language** form field (he, en, fr, es, ar; default en). They write audio to a temp file, call transcription then summarization (with language), and return either `APIResponse` (transcript + analysis, including `translated_transcript`), a `.docx`, or a `.pdf`. All file I/O is in `file_utils`; routes orchestrate only and map errors to HTTP status codes.
+
+---
+
+## Audio Input Strategy
+
+### Supported Formats
+
+The system accepts all common professional audio formats:
+
+| Format | Extensions | Use Case |
+|--------|------------|----------|
+| MP3 | `.mp3` | Most common, good compression |
+| WAV | `.wav` | Uncompressed, high quality |
+| M4A | `.m4a` | Apple devices, AAC encoded |
+| AAC | `.aac` | Advanced audio codec |
+| OGG | `.ogg` | Open source, Vorbis/Opus |
+| FLAC | `.flac` | Lossless compression |
+| WebM | `.webm` | Browser recordings |
+| MP4 | `.mp4` | Video format, audio track extracted |
+
+### Upload vs Recording
+
+The frontend supports two input methods:
+
+1. **File Upload**: Traditional drag-and-drop or click-to-select. Works with all formats above.
+2. **Browser Recording**: Uses MediaRecorder API. Outputs WebM or WAV depending on browser support.
+
+Both methods produce a `File` object that is sent identically to the backend. **No special backend logic is needed for recordings** — they are treated exactly like uploaded files.
+
+### Why No Transcoding
+
+At this stage, we pass audio files directly to Whisper without transcoding because:
+
+1. **Whisper handles multiple formats natively** — It uses FFmpeg internally and supports MP3, WAV, M4A, AAC, OGG, FLAC, and WebM.
+2. **Transcoding adds latency** — Converting formats server-side would increase processing time.
+3. **Quality preservation** — Avoiding unnecessary re-encoding maintains audio quality.
+4. **Simplicity** — Direct passthrough reduces complexity and potential failure points.
+
+If format issues arise in production, transcoding can be added as a preprocessing step without changing the API contract.
+
+---
+
+## Initial planning and system decomposition
+
+The system was decomposed into clear layers before any AI integration:
+
+1. **API layer** (`app/api/routes.py`): HTTP boundaries only. No business logic, no AI, no file logic.
+2. **Services** (`transcription_service`, `summarization_service`, `document_service`): Each owns a single responsibility. They consume and produce simple types (paths, strings, Pydantic models) and do not depend on FastAPI.
+3. **Utils** (`file_utils`, `env_utils`, `document_labels`): Cross-cutting concerns (temp files, env vars, i18n labels). No AI or HTTP.
+4. **Models** (`schemas.py`): Contracts first. `ActionItem`, `AnalysisResult`, and `APIResponse` were defined before wiring Whisper or Claude so that prompt design and parsing could target a stable schema.
+
+This separation made it possible to test each AI stage in isolation and to swap or upgrade models without touching the rest of the pipeline.
+
+---
+
+## AI usage
+
+- **OpenAI Whisper:** **transcription only.** Audio → plain-text transcript. No summarization, no translation, no language selection.
+- **Claude Sonnet:** **reasoning, summarization, and translation.** Receives transcript + target output language (he, en, fr, es, ar). Produces structured JSON: summary, participants, decisions, action items, and **translated_transcript**, all in the chosen language. No speech-to-text.
+
+### Whisper Configuration
+
+Whisper handles transcription only. It does not:
+- Perform translation
+- Identify speakers (speaker identification is heuristic: "Speaker 1", "Speaker 2")
+- Generate summaries
+
+This keeps the transcription stage focused and predictable.
+
+---
+
+## Document Export Architecture
+
+### Single Source of Content
+
+Document generation follows a **single content source, multiple formats** architecture:
+
+```
+analysis (AnalysisResult)
+    ├── generate_word_document(analysis, language) → .docx
+    └── generate_pdf_document(analysis, language) → .pdf
+```
+
+Both Word and PDF generators:
+- Receive the same `AnalysisResult` object
+- Use the same language-aware labels from `document_labels.py`
+- Apply RTL formatting for Hebrew and Arabic
+- Produce identical content structure
+
+### Language-Aware Documents
+
+All document section headings are localized:
+
+```python
+DOCUMENT_LABELS = {
+    "en": {
+        "title": "Meeting Summary",
+        "transcript": "Transcript",
+        "summary": "Summary",
+        ...
+    },
+    "he": {
+        "title": "סיכום פגישה",
+        "transcript": "תמלול",
+        ...
+    },
+    # fr, es, ar...
+}
+```
+
+The backend receives the `language` parameter and passes it to document generation. Both Word and PDF respect:
+- Localized headings
+- RTL text direction for Hebrew/Arabic
+- Proper alignment and paragraph direction
+
+### Why ReportLab for PDF
+
+We chose **ReportLab** over WeasyPrint because:
+
+1. **Pure Python** — No system dependencies (Cairo, Pango) required.
+2. **Programmatic control** — Direct API for styling without CSS intermediary.
+3. **Lightweight** — Smaller footprint, faster startup.
+4. **Well-documented** — Mature library with extensive documentation.
+5. **Production-proven** — Widely used in enterprise applications.
+
+WeasyPrint offers better CSS support but requires system-level dependencies that complicate deployment.
+
+---
+
+## Why OpenAI and Claude were split into separate stages
+
+- **Different roles:** Whisper is built for speech-to-text. Claude is built for reasoning and structured output. Using each for its strength keeps the pipeline simple and predictable.
+- **Easier debugging:** If the transcript is wrong, the bug is in transcription. If the summary is wrong or malformed, the bug is in summarization or the prompt. Mixed responsibilities would blur that line.
+- **Independent testing:** We can validate Whisper with `test_transcription.py` (audio → transcript only) and Claude with `test_summarization.py` (hardcoded transcript → JSON only). No need to run the full stack to verify one stage.
+- **Operational flexibility:** Transcripts can be cached, re-summarized with different prompts, or fed into other tools without re-running Whisper. The split makes those options straightforward.
+
+---
+
+## Isolation testing before integration
+
+1. **`test_transcription.py`:** Accepts a local audio path, calls `transcription_service.transcribe_audio`, prints the transcript. No Claude, no FastAPI. Validates that Whisper runs correctly and that `OPENAI_API_KEY` and file handling behave as expected.
+
+2. **`test_summarization.py`:** Loads the system prompt from `app/prompts/meeting_summary_prompt.txt`, sends a hardcoded transcript to Claude, prints the raw response and parsed JSON. No audio, no Whisper. Validates that Claude returns valid JSON and that the prompt produces the desired structure.
+
+Only after both scripts ran successfully did we wire the full pipeline in `POST /api/process-meeting`. This caught issues (e.g. missing keys, bad paths, prompt drift) early and kept integration minimal.
+
+---
+
+## Prompt design and strict JSON enforcement
+
+The meeting-analysis prompt (`app/prompts/meeting_summary_prompt.txt`) is designed as follows:
+
+- **Inputs:** Raw transcript + target output language (ISO 639-1: he, en, fr, es, ar).
+- **Responsibilities:** Summarize, extract participants, decisions, action items; produce a **translated, clean transcript** in the target language.
+- **Rules:** Transcript-only; no hallucinations; empty arrays when info is missing; **valid JSON only**—no markdown, no code fences, no commentary; **do not mix languages** (all output in target language).
+- **Output schema:** `summary`, `participants`, `decisions`, `action_items`, `translated_transcript`. Schema mirrors `AnalysisResult` and `ActionItem`.
+- **Edge case (insufficient transcript):** `summary`: "Transcript too short or unclear to summarize."; empty arrays; `translated_transcript`: original transcript translated as-is.
+
+We send "Target output language: {code}" and the transcript in the user message. We use `json.loads` on the (optionally fence-stripped) Claude response and `AnalysisResult.model_validate(data)`. Invalid JSON or schema mismatch → `ValueError` → 400.
+
+---
+
+## Why translation is done in the LLM, not Whisper or frontend
+
+- **Whisper** is built for speech-to-text only. It does not take a "target language" for structured output; we keep it single-purpose.
+- **Frontend** would require a separate translation step (e.g. another API or client-side translation) and would duplicate logic. Translation is inherently part of "understanding + restructuring" the meeting.
+- **Claude** already receives the transcript for summarization and extraction. Adding translation in the same call keeps the pipeline simple, ensures summary and translated transcript are coherent, and avoids extra services or latency. One model, one pass, one schema.
+
+---
+
+## Markdown code-block issue and how it was addressed
+
+**The problem:** LLMs sometimes wrap JSON in markdown code fences (` ```json ... ``` `) even when explicitly instructed not to. This breaks `json.loads` and causes 400 errors in the API, making the system brittle and unsuitable for production.
+
+**Why prompt-only wasn't enough:** While the system prompt forbids markdown and provides examples of raw JSON, Claude occasionally still wraps responses in code fences. This is a known LLM behavior pattern: models trained on code-heavy datasets default to markdown formatting for structured output. Relying solely on prompt compliance creates a reliability gap.
+
+**The solution:** A minimal defensive guard (`_extract_json` in `summarization_service.py`) strips markdown code fences if present, then passes the cleaned string to `json.loads`. The function:
+- Trims whitespace.
+- Removes leading ` ```json ` or ` ``` ` markers.
+- Removes trailing ` ``` ` markers.
+- Returns the cleaned string unchanged if no fences are present.
+
+This improves robustness without weakening prompt discipline. The prompt still enforces raw JSON (reducing the need for stripping), but the guard ensures the API never fails due to markdown wrapping. Invalid JSON still raises `ValueError` as expected; we only handle the formatting edge case.
+
+**Frontend readiness:** The backend is designed to plug into a React frontend later. By ensuring responses are always clean JSON (no markdown artifacts), we avoid frontend parsing complexity and keep the API contract stable.
+
+---
+
+## Final system flow validation
+
+End-to-end flow:
+
+1. **Upload/Record** → `POST /api/process-meeting` (or export-docx/export-pdf) with audio file and optional `language` (default en).
+2. **Validation** → `file_utils.validate_audio_file(upload)` checks extension and MIME type.
+3. **Temp file** → `file_utils.write_temp_audio`; suffix from filename.
+4. **Transcribe** → `transcription_service.transcribe_audio(path)` → Whisper returns plain text.
+5. **Summarize** → `summarization_service.analyze_transcript(transcript, language)` → Claude returns JSON (summary, participants, decisions, action_items, **translated_transcript**); we parse and validate as `AnalysisResult`.
+6. **Response** → `APIResponse(transcript=..., analysis=...)` as JSON, or **Document** → `document_service.generate_word_document(analysis, language)` or `generate_pdf_document(analysis, language)`, then stream file.
+7. **Cleanup** → `file_utils.delete_temp_file(path)` in `finally`; temp document via `BackgroundTasks` for export.
+
+**E2E validation:** Run `curl -X POST -F "audio=@meeting.mp3" -F "language=he" .../api/process-meeting` and confirm `analysis.translated_transcript` and summary are in Hebrew. Run export-docx or export-pdf with `language=he` and confirm the document is in Hebrew with RTL formatting. Repeat for other supported languages.
+
+---
+
+## How This Exceeds Task Requirements
+
+This implementation goes beyond the basic requirements:
+
+1. **Professional audio format support** — 8 formats instead of just MP3/WAV.
+2. **Browser recording** — Users can record directly without external software.
+3. **Dual export formats** — Both Word and PDF with identical content.
+4. **Full i18n** — 5 languages with complete RTL support.
+5. **Language-aware documents** — Headings, labels, and text direction adapt to selected language.
+6. **Clean architecture** — Single content source, multiple output formats.
+7. **Input validation** — Extension and MIME type checking with clear error messages.
+8. **Language-aware filenames** — `meeting_summary_he.docx` instead of generic names.
+
+---
+
+## Pipeline orchestration (reference)
+
+The `POST /api/process-meeting` handler:
+
+1. Validates `language` (he, en, fr, es, ar); 400 if unsupported.
+2. Validates audio file format; 400 if unsupported.
+3. Reads uploaded bytes, rejects empty file.
+4. Uses `file_utils.suffix_from_filename` and `write_temp_audio` to create a temp file.
+5. Calls `transcription_service.transcribe_audio(path)` then `summarization_service.analyze_transcript(transcript, language)`.
+6. Returns `APIResponse(transcript=..., analysis=...)`.
+7. Maps `ValueError` → 400, `RuntimeError` → 503.
+8. Always runs `file_utils.delete_temp_file(path)` in `finally`.
+
+Export endpoints: same pipeline, then `document_service.generate_word_document` or `generate_pdf_document`, `FileResponse` with language-aware filename, and `BackgroundTasks` for document cleanup.
+
+---
+
+## Challenges encountered
+
+- **JSON enforcement:** Getting Claude to output *only* valid JSON, with no markdown or extra text, so the API can parse and validate reliably.
+- **Markdown-wrapped responses:** Claude occasionally wraps JSON in ` ```json ... ``` ` despite instructions, breaking `json.loads`.
+- **Isolation testing:** Validating Whisper and Claude independently before wiring the full pipeline, without running the full stack for each stage.
+- **Language consistency:** Ensuring summary, extracted fields, and translated transcript are all in the selected output language, with no mixed-language leakage.
+- **Separation of concerns:** Keeping transcription, summarization/translation, and document export in distinct services; no AI or file logic in routes.
+- **RTL document formatting:** Proper right-to-left text direction and alignment for Hebrew and Arabic in both Word and PDF.
+- **Browser recording compatibility:** Handling different MIME types across browsers (WebM vs WAV).
+
+---
+
+## Solutions applied
+
+| Challenge | Solution |
+|-----------|----------|
+| Ensuring Claude outputs valid JSON only | Strict prompt rules, no-markdown examples, and direct `json.loads` + Pydantic validation. |
+| Claude wrapping JSON in markdown code fences | Minimal `_extract_json` helper strips ` ```json ` / ` ``` ` markers if present, ensuring `json.loads` always receives clean input. Prompt discipline remains; guard handles edge cases. |
+| Keeping routes free of business logic | All AI and file logic in services/utils; routes only orchestrate and map errors. |
+| Validating each AI stage before integration | `test_transcription.py` and `test_summarization.py` exercise Whisper and Claude independently. |
+| Temp file cleanup on all paths | `try` / `finally` around transcribe + summarize; `delete_temp_file` always runs. |
+| Frontend-ready API responses | Clean JSON extraction ensures responses are parseable without preprocessing, suitable for React or other frontend frameworks. |
+| Language consistency | Prompt enforces "do not mix languages"; all output (summary, participants, decisions, action_items, translated_transcript) in target language. Routes validate `language` against allowed set. |
+| Separation of concerns | AI only in services; routes validate input, orchestrate, map errors. Document service consumes `AnalysisResult` only, uses `translated_transcript` for documents. |
+| RTL document formatting | `document_labels.py` provides `is_rtl()` helper; document generators apply RTL paragraph direction and right alignment. |
+| Multiple audio formats | Centralized `ALLOWED_AUDIO_FORMATS` in `file_utils.py`; validation checks both extension and MIME type. |
+| Browser recording | Frontend uses MediaRecorder API; output treated identically to uploads (same API endpoint). |
+
+---
+
+## Time Tracking (approximate)
+
+| Stage | Focus | Time |
+|-------|--------|------|
+| Project setup | Structure, schemas, config, empty services | 1–2 h |
+| FastAPI skeleton | App, CORS, router, health | ~30 min |
+| Transcription service | Whisper integration, env, error handling | ~1 h |
+| Prompt design | System prompt, schema alignment, examples | ~1 h |
+| Summarization service | Claude, prompt loading, JSON parse, validation | ~1 h |
+| Pipeline wiring | Route, file_utils, e2e flow | ~1 h |
+| Isolation tests | `test_transcription.py`, `test_summarization.py` | ~30 min |
+| Docs and final validation | README, md.PROCESS, sanity checks | ~1 h |
+| Multi-language & translation | Prompt (language + translated_transcript), schema, summarization, routes, document_service, README, md.PROCESS | ~1–2 h |
+| Extended audio formats | file_utils validation, route updates, frontend constants | ~1 h |
+| PDF export | ReportLab integration, RTL support, document_service | ~2 h |
+| Language-aware documents | document_labels, Word/PDF generators, headings | ~1–2 h |
+
+Total on the order of **10–14 hours** for complete implementation.
+
+---
+
+## Document export
+
+Document export is implemented as a **separate service** (`document_service`) that consumes `analysis: AnalysisResult` and writes either `.docx` or `.pdf` to a temp path. It uses **`analysis.translated_transcript`** for the Transcript section so the document output matches the selected output language. Pipeline: **audio → Whisper → transcript → Claude → analysis → (optional) Word/PDF**. Document generation is a pure, post‑AI step: no LLM calls, no file I/O outside `file_utils` (we use `delete_temp_file` for cleanup on error), and no FastAPI coupling. This keeps the pipeline modular.
+
+---
+
+## E2E validation
+
+**Full pipeline (single flow):**  
+`audio → Whisper → transcript → Claude → analysis → optional Word/PDF`
+
+- **`POST /api/process-meeting`** — Form: `audio`, `language` (default en). Returns JSON: `transcript`, `analysis` (including `translated_transcript`). Use for frontend or downstream services.
+- **`POST /api/process-meeting/export-docx`** — Form: `audio`, `language`. Same pipeline, then `document_service.generate_word_document(analysis, language)`, stream `meeting_summary_{lang}.docx`; cleanup temp audio in `finally`, temp docx via `BackgroundTasks`.
+- **`POST /api/process-meeting/export-pdf`** — Form: `audio`, `language`. Same pipeline, then `document_service.generate_pdf_document(analysis, language)`, stream `meeting_summary_{lang}.pdf`; cleanup temp audio in `finally`, temp pdf via `BackgroundTasks`.
+
+Document exports are **optional and separate** so that (1) the default API stays JSON-only and frontend-friendly, (2) document generation remains a post‑AI step with no AI in routes, and (3) all endpoints reuse the same pipeline. **Language selection** affects summary, `translated_transcript`, and document content/headings. E2E checks: `curl -X POST -F "audio=@meeting.mp3" -F "language=he" .../api/process-meeting` shows Hebrew in `analysis`; `.../export-docx` or `.../export-pdf` with `language=he` yields documents in Hebrew with RTL formatting.
+
+---
+
+## Environment Separation Strategy
+
+### Why Environment Variables
+
+All configuration is externalized to environment variables for:
+
+1. **Security** — API keys and secrets never committed to version control
+2. **Flexibility** — Same codebase runs in development, staging, and production
+3. **12-Factor App compliance** — Configuration stored in the environment
+4. **CI/CD readiness** — Easy to inject secrets in deployment pipelines
+5. **Docker/Kubernetes** — Standard way to configure containers
+
+### Frontend Environment
+
+The frontend uses Vite's environment variable system:
+
+| Variable | Purpose | Example |
+|----------|---------|---------|
+| `VITE_API_BASE_URL` | Backend API URL | `http://127.0.0.1:8000/api` |
+| `VITE_APP_ENV` | Environment name | `development` or `production` |
+
+**Files:**
+- `.env.example` — Template (committed)
+- `.env` — Local development (gitignored)
+- `.env.production` — Production build (gitignored)
+
+**Usage in code:**
+```typescript
+const API_BASE = import.meta.env.VITE_API_BASE_URL;
+```
+
+### Backend Environment
+
+The backend uses pydantic-settings for type-safe environment loading:
+
+| Variable | Purpose | Example |
+|----------|---------|---------|
+| `APP_ENV` | Environment name | `production` |
+| `APP_HOST` | Server bind address | `0.0.0.0` |
+| `APP_PORT` | Server port | `8000` |
+| `CORS_ORIGINS` | Allowed origins (comma-separated) | `https://speechi.adirg.dev` |
+| `OPENAI_API_KEY` | Whisper API key | `sk-...` |
+| `ANTHROPIC_API_KEY` | Claude API key | `sk-ant-...` |
+
+**Files:**
+- `.env.example` — Template (committed)
+- `.env` — Actual config (gitignored)
+
+**Usage in code:**
+```python
+from app.config.settings import settings
+print(settings.cors_origins_list)  # Parsed list of origins
+```
+
+---
+
+## Why Frontend and Backend are Decoupled
+
+### Architectural Decision
+
+Frontend and backend are completely independent applications that communicate only via HTTP API:
+
+```
+┌─────────────┐         HTTP/HTTPS         ┌─────────────┐
+│   Frontend  │ ◄──────────────────────────►│   Backend   │
+│   (React)   │    JSON / FormData / Blob   │  (FastAPI)  │
+└─────────────┘                             └─────────────┘
+     ↓                                           ↓
+ Static files                               Python runtime
+ (CDN, Nginx)                              (uvicorn, Docker)
+```
+
+### Benefits
+
+1. **Independent Deployment** — Frontend can be deployed to CDN without touching backend
+2. **Independent Scaling** — Backend can scale horizontally without affecting frontend
+3. **Technology Freedom** — Frontend and backend can use different tech stacks
+4. **Team Independence** — Frontend and backend teams can work in parallel
+5. **Caching** — Frontend static files cached at edge; API responses can be cached separately
+6. **Security** — Frontend has no access to backend secrets; CORS enforces origin restrictions
+
+### Production Architecture
+
+```
+                    ┌─────────────────┐
+                    │   Load Balancer │
+                    │   (SSL/HTTPS)   │
+                    └────────┬────────┘
+                             │
+            ┌────────────────┴────────────────┐
+            │                                 │
+            ▼                                 ▼
+    ┌───────────────┐               ┌───────────────┐
+    │   Frontend    │               │   Backend     │
+    │   (Nginx)     │               │   (FastAPI)   │
+    │   /           │               │   /api        │
+    └───────────────┘               └───────────────┘
+            │                                 │
+            ▼                                 ▼
+    ┌───────────────┐               ┌───────────────┐
+    │  Static Files │               │  OpenAI API   │
+    │  dist/        │               │  Anthropic    │
+    └───────────────┘               └───────────────┘
+```
+
+---
+
+## How Environment-Based Configuration Enables Scaling
+
+### Docker Support
+
+Both frontend and backend can be containerized with environment variables:
+
+**Backend Dockerfile:**
+```dockerfile
+FROM python:3.12-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+ENV APP_ENV=production
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+**Frontend Dockerfile:**
+```dockerfile
+FROM node:20-alpine AS build
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+ARG VITE_API_BASE_URL
+ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
+RUN npm run build
+
+FROM nginx:alpine
+COPY --from=build /app/dist /usr/share/nginx/html
+```
+
+### CI/CD Pipeline
+
+Environment variables can be injected at build/deploy time:
+
+```yaml
+# GitHub Actions example
+jobs:
+  deploy:
+    env:
+      VITE_API_BASE_URL: https://speechi.adirg.dev/api
+    steps:
+      - run: npm run build
+      - run: deploy-to-cdn dist/
+```
+
+### Kubernetes
+
+Environment variables map naturally to ConfigMaps and Secrets:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: speechi-backend
+data:
+  APP_ENV: production
+  CORS_ORIGINS: https://speechi.adirg.dev
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: speechi-secrets
+stringData:
+  OPENAI_API_KEY: sk-...
+  ANTHROPIC_API_KEY: sk-ant-...
+```
+
+---
+
+## Production Deployment Checklist
+
+### Before Deployment
+
+- [ ] All environment variables documented in `.env.example`
+- [ ] No hardcoded URLs in frontend code
+- [ ] No hardcoded URLs in backend code
+- [ ] No secrets in version control
+- [ ] CORS origins restricted to production domain
+- [ ] `npm run build` succeeds with production env
+- [ ] `uvicorn app.main:app` starts without errors
+
+### URLs
+
+| Service | URL |
+|---------|-----|
+| Frontend | https://speechi.adirg.dev |
+| Backend API | https://speechi.adirg.dev/api |
+| Health Check | https://speechi.adirg.dev/api/health |
+| Swagger Docs | https://speechi.adirg.dev/api/docs (if enabled) |
+
+### Environment Variables (Production)
+
+**Frontend (`.env.production`):**
+```
+VITE_API_BASE_URL=https://speechi.adirg.dev/api
+VITE_APP_ENV=production
+```
+
+**Backend (`.env`):**
+```
+APP_ENV=production
+APP_HOST=0.0.0.0
+APP_PORT=8000
+CORS_ORIGINS=https://speechi.adirg.dev
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+```
