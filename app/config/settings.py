@@ -28,8 +28,14 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     app_port: int = 8000
     
+    # ---- API Routing ----
+    # API prefix (empty string for root-level routes in production)
+    # Development: /api
+    # Production: "" (empty, routes at root)
+    api_prefix: str = "/api"
+    
     # ---- CORS ----
-    # Comma-separated string of allowed origins
+    # Comma-separated string of allowed origins (no wildcards in production)
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     
     # ---- API Keys ----
@@ -47,10 +53,28 @@ class Settings(BaseSettings):
     
     @property
     def cors_origins_list(self) -> List[str]:
-        """Parse CORS origins string into a list."""
+        """Parse CORS origins string into a list. No wildcards allowed."""
         if not self.cors_origins:
             return []
-        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+        origins = [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+        # Filter out wildcards in production
+        if self.is_production:
+            origins = [o for o in origins if o != "*"]
+        return origins
+    
+    @property
+    def normalized_api_prefix(self) -> str:
+        """
+        Get normalized API prefix.
+        Returns empty string if prefix is "/" or empty.
+        Ensures prefix starts with "/" if non-empty.
+        """
+        prefix = self.api_prefix.strip()
+        if not prefix or prefix == "/":
+            return ""
+        if not prefix.startswith("/"):
+            prefix = "/" + prefix
+        return prefix
     
     class Config:
         # Load from .env file

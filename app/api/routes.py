@@ -3,16 +3,22 @@ API route definitions.
 
 HTTP endpoints for audio upload, transcription, summarization,
 and document generation (Word + PDF). No business logic; delegates to services.
+
+Route prefix is configurable via API_PREFIX environment variable:
+- Development: /api (routes at /api/process-meeting, etc.)
+- Production: "" (routes at /process-meeting, etc.)
 """
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
+from app.config.settings import settings
 from app.models.schemas import APIResponse
 from app.services import document_service, summarization_service, transcription_service
 from app.utils import file_utils
 
-router = APIRouter(prefix="/api", tags=["api"])
+# Create router with configurable prefix from environment
+router = APIRouter(prefix=settings.normalized_api_prefix, tags=["api"])
 
 _SUPPORTED_LANGUAGES = frozenset({"he", "en", "fr", "es", "ar"})
 
@@ -45,8 +51,12 @@ def _validate_request(audio: UploadFile, language: str) -> str:
 
 @router.get("/health")
 def health() -> dict[str, str]:
-    """Liveness check. No business logic."""
-    return {"status": "ok"}
+    """Liveness check. Returns API status and configuration info."""
+    return {
+        "status": "ok",
+        "environment": settings.app_env,
+        "api_prefix": settings.normalized_api_prefix or "(root)",
+    }
 
 
 @router.get("/supported-formats")
