@@ -2,7 +2,8 @@
 Application configuration.
 
 Central settings sourced from environment. API keys, CORS origins,
-server configuration, and feature flags. Single source of truth for config.
+server configuration, database, authentication, and feature flags.
+Single source of truth for config.
 
 Uses pydantic-settings for type-safe environment variable loading.
 """
@@ -45,6 +46,20 @@ class Settings(BaseSettings):
     # ---- Optional API Base URLs ----
     openai_base_url: str | None = None
     anthropic_base_url: str | None = None
+    
+    # ---- MongoDB ----
+    # Connection URI (includes credentials)
+    mongodb_uri: str = ""
+    mongodb_db_name: str = "speechi"
+    
+    # ---- JWT Authentication ----
+    jwt_secret_key: str = "CHANGE_ME_IN_PRODUCTION_USE_LONG_RANDOM_STRING"
+    jwt_algorithm: str = "HS256"
+    jwt_expire_days: int = 7
+    
+    # ---- Usage Limits ----
+    guest_daily_limit: int = 1
+    registered_daily_limit: int = 5
     
     @property
     def is_production(self) -> bool:

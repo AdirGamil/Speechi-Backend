@@ -7,14 +7,22 @@ and document generation (Word + PDF). No business logic; delegates to services.
 Route prefix is configurable via API_PREFIX environment variable:
 - Development: /api (routes at /api/process-meeting, etc.)
 - Production: "" (routes at /process-meeting, etc.)
+
+Usage tracking:
+- Authenticated users: tracked in MongoDB
+- Guests: tracked client-side (LocalStorage)
 """
 
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
+from typing import Optional
+
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from app.config.settings import settings
+from app.db.models import Usage, UserPublic
 from app.models.schemas import APIResponse
 from app.services import document_service, summarization_service, transcription_service
+from app.services.auth_service import get_current_user
 from app.utils import file_utils
 
 # Create router with configurable prefix from environment
@@ -49,6 +57,41 @@ def _validate_request(audio: UploadFile, language: str) -> str:
     return lang
 
 
+async def _check_usage_limit(user: Optional[UserPublic]) -> None:
+    """
+    Check if user has exceeded daily limit.
+    
+    For authenticated users, checks MongoDB.
+    For guests, this is a no-op (limit checked client-side).
+    
+    Raises:
+        HTTPException: If limit exceeded.
+    """
+    if user is None:
+        # Guest - limit enforced client-side
+        return
+    
+    # Authenticated user - check backend limit
+    can_use = await Usage.can_use(user.id, settings.registered_daily_limit)
+    if not can_use:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Daily limit reached. You can process {settings.registered_daily_limit} meetings per day.",
+        )
+
+
+async def _increment_usage(user: Optional[UserPublic]) -> int:
+    """
+    Increment usage counter for authenticated users.
+    
+    Returns the new count.
+    """
+    if user is None:
+        return 0
+    
+    return await Usage.increment(user.id)
+
+
 @router.get("/health")
 def health() -> dict[str, str]:
     """Liveness check. Returns API status and configuration info."""
@@ -72,15 +115,22 @@ def supported_formats() -> dict[str, list[str]]:
 async def process_meeting(
     audio: UploadFile = File(...),
     language: str = Form("en"),
+    user: Optional[UserPublic] = Depends(get_current_user),
 ) -> APIResponse:
     """
     Upload audio → transcribe (Whisper) → analyze (Claude) → return transcript + analysis.
 
     Supported formats: MP3, WAV, M4A, AAC, OGG, FLAC, WEBM, MP4
     language: Output language ISO code (he, en, fr, es, ar). Default en.
-    No AI or file logic in route; orchestrates services and utils only.
+    
+    Usage tracking:
+    - Authenticated users: usage tracked in database
+    - Guests: usage tracked client-side
     """
     lang = _validate_request(audio, language)
+    
+    # Check usage limit for authenticated users
+    await _check_usage_limit(user)
     
     data = await audio.read()
     if not data:
@@ -91,6 +141,10 @@ async def process_meeting(
     try:
         transcript = transcription_service.transcribe_audio(path)
         analysis = summarization_service.analyze_transcript(transcript, lang)
+        
+        # Increment usage for authenticated users
+        await _increment_usage(user)
+        
         return APIResponse(transcript=transcript, analysis=analysis)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -105,6 +159,7 @@ async def process_meeting_export_docx(
     background_tasks: BackgroundTasks,
     audio: UploadFile = File(...),
     language: str = Form("en"),
+    user: Optional[UserPublic] = Depends(get_current_user),
 ):
     """
     E2E: upload audio → transcribe → analyze → generate .docx → return file.
@@ -116,6 +171,9 @@ async def process_meeting_export_docx(
     RTL support for Hebrew and Arabic.
     """
     lang = _validate_request(audio, language)
+    
+    # Check usage limit for authenticated users
+    await _check_usage_limit(user)
     
     data = await audio.read()
     if not data:
@@ -129,6 +187,9 @@ async def process_meeting_export_docx(
         analysis = summarization_service.analyze_transcript(transcript, lang)
         docx_path = document_service.generate_word_document(analysis, lang)
         background_tasks.add_task(file_utils.delete_temp_file, docx_path)
+        
+        # Increment usage for authenticated users
+        await _increment_usage(user)
         
         # Language-aware filename
         filename = f"meeting_summary_{lang}.docx"
@@ -155,6 +216,7 @@ async def process_meeting_export_pdf(
     background_tasks: BackgroundTasks,
     audio: UploadFile = File(...),
     language: str = Form("en"),
+    user: Optional[UserPublic] = Depends(get_current_user),
 ):
     """
     E2E: upload audio → transcribe → analyze → generate .pdf → return file.
@@ -168,6 +230,9 @@ async def process_meeting_export_pdf(
     """
     lang = _validate_request(audio, language)
     
+    # Check usage limit for authenticated users
+    await _check_usage_limit(user)
+    
     data = await audio.read()
     if not data:
         raise HTTPException(status_code=400, detail="Empty file")
@@ -180,6 +245,9 @@ async def process_meeting_export_pdf(
         analysis = summarization_service.analyze_transcript(transcript, lang)
         pdf_path = document_service.generate_pdf_document(analysis, lang)
         background_tasks.add_task(file_utils.delete_temp_file, pdf_path)
+        
+        # Increment usage for authenticated users
+        await _increment_usage(user)
         
         # Language-aware filename
         filename = f"meeting_summary_{lang}.pdf"

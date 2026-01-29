@@ -6,19 +6,53 @@ Serves as the single ASGI application for the meeting transcription backend.
 
 CORS is configured via environment variables for production safety.
 API prefix is configurable (default /api for development, empty for production).
+MongoDB connection is established on startup.
 """
+
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.routes import router as api_router
+from app.api.auth_routes import router as auth_router
 from app.config.settings import settings
+from app.db.connection import init_db, close_db
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Application lifespan handler.
+    
+    Manages startup and shutdown events.
+    """
+    # Startup
+    print("=" * 50)
+    print("[Speechi API] Starting up...")
+    print(f"[Speechi API] Environment: {settings.app_env}")
+    print(f"[Speechi API] API prefix: {settings.normalized_api_prefix or '(root)'}")
+    print(f"[Speechi API] CORS origins: {settings.cors_origins_list}")
+    print(f"[Speechi API] Server: {settings.app_host}:{settings.app_port}")
+    
+    # Initialize database
+    await init_db()
+    
+    print("=" * 50)
+    
+    yield
+    
+    # Shutdown
+    print("[Speechi API] Shutting down...")
+    await close_db()
+
 
 app = FastAPI(
     title="Speechi - Meeting Transcription & Summarization API",
-    description="Audio → Whisper → Claude → JSON (optional Word/PDF).",
-    version="0.1.0",
+    description="Audio → Whisper → Claude → JSON (optional Word/PDF). Includes user authentication.",
+    version="0.2.0",
+    lifespan=lifespan,
     # Disable docs in production if needed
     docs_url="/docs" if not settings.is_production else None,
     redoc_url="/redoc" if not settings.is_production else None,
@@ -31,7 +65,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "Accept"],
 )
 
@@ -44,37 +78,28 @@ async def root():
     Root endpoint. Returns API information.
     Useful for health checks and service discovery.
     """
+    prefix = settings.normalized_api_prefix
     return JSONResponse(
         content={
             "service": "Speechi API",
-            "version": "0.1.0",
+            "version": "0.2.0",
             "status": "ok",
             "docs": "/docs" if not settings.is_production else None,
-            "api_prefix": settings.normalized_api_prefix or "(root)",
+            "api_prefix": prefix or "(root)",
             "endpoints": {
-                "health": f"{settings.normalized_api_prefix}/health",
-                "process_meeting": f"{settings.normalized_api_prefix}/process-meeting",
-                "export_docx": f"{settings.normalized_api_prefix}/process-meeting/export-docx",
-                "export_pdf": f"{settings.normalized_api_prefix}/process-meeting/export-pdf",
+                "health": f"{prefix}/health",
+                "process_meeting": f"{prefix}/process-meeting",
+                "auth_register": f"{prefix}/auth/register",
+                "auth_login": f"{prefix}/auth/login",
+                "auth_me": f"{prefix}/auth/me",
             },
         }
     )
 
 
-# Include API router with configurable prefix
+# Include API routers with configurable prefix
 app.include_router(api_router)
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Log configuration on startup."""
-    print("=" * 50)
-    print("[Speechi API] Starting up...")
-    print(f"[Speechi API] Environment: {settings.app_env}")
-    print(f"[Speechi API] API prefix: {settings.normalized_api_prefix or '(root)'}")
-    print(f"[Speechi API] CORS origins: {settings.cors_origins_list}")
-    print(f"[Speechi API] Server: {settings.app_host}:{settings.app_port}")
-    print("=" * 50)
+app.include_router(auth_router, prefix=settings.normalized_api_prefix)
 
 
 # For running with: python -m app.main
