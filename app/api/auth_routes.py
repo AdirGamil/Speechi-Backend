@@ -151,23 +151,27 @@ async def login(body: LoginRequest):
             detail="Invalid email or password",
         )
     
-    # Update last login
-    await User.update_last_login(user_db.id)
+    # Use string id everywhere for safe serialization
+    user_id = str(user_db.id)
+    
+    # Update last login (non-blocking)
+    await User.update_last_login(user_id)
     
     # Create token
-    token = create_access_token(user_db.id, user_db.email)
+    token = create_access_token(user_id, user_db.email)
     
     # Get usage
-    used_today = await Usage.get(user_db.id)
+    used_today = await Usage.get(user_id)
     
-    # Create public user object
+    # Build public user with explicit str/datetime for JSON
+    now_utc = datetime.now(timezone.utc)
     user_public = UserPublic(
-        id=user_db.id,
+        id=user_id,
         firstName=user_db.firstName,
         lastName=user_db.lastName,
         email=user_db.email,
         createdAt=user_db.createdAt,
-        lastLoginAt=datetime.now(timezone.utc),
+        lastLoginAt=now_utc,
     )
     
     return AuthResponse(

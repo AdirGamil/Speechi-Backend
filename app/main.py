@@ -9,9 +9,10 @@ API prefix is configurable (default /api for development, empty for production).
 MongoDB connection is established on startup.
 """
 
+import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -19,6 +20,8 @@ from app.api.routes import router as api_router
 from app.api.auth_routes import router as auth_router
 from app.config.settings import settings
 from app.db.connection import init_db, close_db
+
+logger = logging.getLogger("speechi")
 
 
 @asynccontextmanager
@@ -61,13 +64,24 @@ app = FastAPI(
 # CORS middleware - origins loaded from environment
 # In production, this is restricted to the frontend domain only
 # No wildcards allowed in production
+# Must be added before routes so all responses (including errors) get CORS headers
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "Accept"],
+    expose_headers=["*"],
 )
+
+# Global exception handler so 500 responses are JSON and go through CORS
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled exception: %s", exc)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
 
 
 # Root endpoint - catches requests to /
