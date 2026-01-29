@@ -126,17 +126,20 @@ The backend receives the `language` parameter and passes it to document generati
 - RTL text direction for Hebrew/Arabic
 - Proper alignment and paragraph direction
 
-### Why ReportLab for PDF
+### PDF export: bug, font embedding, and WeasyPrint
 
-We chose **ReportLab** over WeasyPrint because:
+**The PDF bug:** When PDFs were generated with ReportLab (canvas-based API), Hebrew and Arabic text rendered as **squares (■■■■)**. ReportLab’s default fonts do not include Hebrew/Arabic glyphs; without embedding fonts that support those scripts, the PDF engine falls back to a font that lacks the glyphs and shows replacement characters. This is a font embedding / script support issue, not a simple encoding bug.
 
-1. **Pure Python** — No system dependencies (Cairo, Pango) required.
-2. **Programmatic control** — Direct API for styling without CSS intermediary.
-3. **Lightweight** — Smaller footprint, faster startup.
-4. **Well-documented** — Mature library with extensive documentation.
-5. **Production-proven** — Widely used in enterprise applications.
+**Why encoding “tricks” don’t fix it:** Ensuring UTF-8 in the pipeline fixes encoding on disk and in memory, but the PDF renderer still needs a font that contains the glyphs for the code points. Without such a font (and proper embedding), the result remains squares. A correct, production-ready fix therefore requires using a PDF stack that supports font embedding and multi-script fonts.
 
-WeasyPrint offers better CSS support but requires system-level dependencies that complicate deployment.
+**Architectural decision — WeasyPrint:** We switched from ReportLab to **WeasyPrint** (HTML → PDF) because:
+
+1. **HTML/CSS text stack** — WeasyPrint uses the same text layout as the web (Pango/Cairo), with proper Unicode and **font embedding**. We can load fonts (e.g. Heebo, Noto Sans Arabic, Noto Sans) via `@font-face` and they are embedded in the PDF, so Hebrew, Arabic, and Latin render correctly.
+2. **RTL support** — HTML `dir="rtl"` and CSS `direction: rtl; text-align: right` give correct right-to-left layout for Hebrew and Arabic without ad-hoc hacks.
+3. **No squares** — With the right fonts in `app/assets/fonts/` and `@font-face` in the template, all supported languages (Hebrew, Arabic, English, French, Spanish) render as readable text; no replacement characters.
+4. **Production-ready** — Same content source as Word; language-aware headings and RTL are applied in one place (`pdf_service.py`). Temp file cleanup is done via `BackgroundTasks` after streaming the PDF.
+
+**Font embedding:** Fonts (Heebo for Hebrew, Noto Sans Arabic for Arabic, Noto Sans for Latin) are loaded from local files under `app/assets/fonts/` and declared with `@font-face` in the HTML template. WeasyPrint embeds them in the PDF so the document is self-contained and displays correctly in Adobe Reader and browsers. See `app/assets/fonts/README.md` for which files to place where.
 
 ---
 
@@ -208,7 +211,7 @@ End-to-end flow:
 3. **Temp file** → `file_utils.write_temp_audio`; suffix from filename.
 4. **Transcribe** → `transcription_service.transcribe_audio(path)` → Whisper returns plain text.
 5. **Summarize** → `summarization_service.analyze_transcript(transcript, language)` → Claude returns JSON (summary, participants, decisions, action_items, **translated_transcript**); we parse and validate as `AnalysisResult`.
-6. **Response** → `APIResponse(transcript=..., analysis=...)` as JSON, or **Document** → `document_service.generate_word_document(analysis, language)` or `generate_pdf_document(analysis, language)`, then stream file.
+6. **Response** → `APIResponse(transcript=..., analysis=...)` as JSON, or **Document** → `document_service.generate_word_document(analysis, language)` or `pdf_service.generate_pdf_document(analysis, language)`, then stream file.
 7. **Cleanup** → `file_utils.delete_temp_file(path)` in `finally`; temp document via `BackgroundTasks` for export.
 
 **E2E validation:** Run `curl -X POST -F "audio=@meeting.mp3" -F "language=he" .../api/process-meeting` and confirm `analysis.translated_transcript` and summary are in Hebrew. Run export-docx or export-pdf with `language=he` and confirm the document is in Hebrew with RTL formatting. Repeat for other supported languages.
@@ -243,7 +246,7 @@ The `POST /api/process-meeting` handler:
 7. Maps `ValueError` → 400, `RuntimeError` → 503.
 8. Always runs `file_utils.delete_temp_file(path)` in `finally`.
 
-Export endpoints: same pipeline, then `document_service.generate_word_document` or `generate_pdf_document`, `FileResponse` with language-aware filename, and `BackgroundTasks` for document cleanup.
+Export endpoints: same pipeline, then `document_service.generate_word_document` or `pdf_service.generate_pdf_document`, `FileResponse` with language-aware filename, and `BackgroundTasks` for document cleanup.
 
 ---
 
@@ -311,7 +314,7 @@ Document export is implemented as a **separate service** (`document_service`) th
 
 - **`POST /api/process-meeting`** — Form: `audio`, `language` (default en). Returns JSON: `transcript`, `analysis` (including `translated_transcript`). Use for frontend or downstream services.
 - **`POST /api/process-meeting/export-docx`** — Form: `audio`, `language`. Same pipeline, then `document_service.generate_word_document(analysis, language)`, stream `meeting_summary_{lang}.docx`; cleanup temp audio in `finally`, temp docx via `BackgroundTasks`.
-- **`POST /api/process-meeting/export-pdf`** — Form: `audio`, `language`. Same pipeline, then `document_service.generate_pdf_document(analysis, language)`, stream `meeting_summary_{lang}.pdf`; cleanup temp audio in `finally`, temp pdf via `BackgroundTasks`.
+- **`POST /api/process-meeting/export-pdf`** — Form: `audio`, `language`. Same pipeline, then `pdf_service.generate_pdf_document(analysis, language)`, stream `meeting_summary_{lang}.pdf`; cleanup temp audio in `finally`, temp pdf via `BackgroundTasks`.
 
 Document exports are **optional and separate** so that (1) the default API stays JSON-only and frontend-friendly, (2) document generation remains a post‑AI step with no AI in routes, and (3) all endpoints reuse the same pipeline. **Language selection** affects summary, `translated_transcript`, and document content/headings. E2E checks: `curl -X POST -F "audio=@meeting.mp3" -F "language=he" .../api/process-meeting` shows Hebrew in `analysis`; `.../export-docx` or `.../export-pdf` with `language=he` yields documents in Hebrew with RTL formatting.
 

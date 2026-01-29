@@ -2,7 +2,7 @@
 
 Upload or record meeting audio; the system transcribes it with **OpenAI Whisper**, analyzes it with **Claude Sonnet**, and returns structured JSON (summary, participants, decisions, action items, translated transcript). Output can be in **Hebrew, English, French, Spanish, or Arabic**. Export to **Word (.docx)** or **PDF** with language-aware headings and RTL support. No database or authentication.
 
-**Tech stack:** Python 3.12, FastAPI, OpenAI Whisper API, Claude Sonnet (Anthropic), python-docx, ReportLab.
+**Tech stack:** Python 3.12, FastAPI, OpenAI Whisper API, Claude Sonnet (Anthropic), python-docx, WeasyPrint (PDF).
 
 ---
 
@@ -11,7 +11,7 @@ Upload or record meeting audio; the system transcribes it with **OpenAI Whisper*
 - **Multi-format audio support** — MP3, WAV, M4A, AAC, OGG, FLAC, WebM, MP4
 - **Browser recording** — Record directly from the frontend (WebM/WAV)
 - **5 output languages** — English, Hebrew, French, Spanish, Arabic
-- **Word & PDF export** — Professional documents with localized headings
+- **Word & PDF export** — Professional documents with localized headings. PDF uses **WeasyPrint** (HTML → PDF) so Hebrew, Arabic, and Latin scripts render correctly with embedded fonts (no ■■■■ squares).
 - **RTL support** — Proper right-to-left formatting for Hebrew and Arabic
 - **Language-aware filenames** — `meeting_summary_he.docx`
 - **Environment-based configuration** — Production-ready with env vars
@@ -80,6 +80,22 @@ Python 3.12+ recommended.
    ```
 4. **Run:** `uvicorn app.main:app --reload`
 5. **Check:** http://127.0.0.1:8000/docs (Swagger) or http://127.0.0.1:8000/api/health
+
+### Windows: PDF export (WeasyPrint)
+
+PDF export uses **WeasyPrint**, which needs **Pango** and its dependencies. On Windows these are not installed by default. To enable PDF export:
+
+1. Install [MSYS2](https://www.msys2.org/#installation) (default options).
+2. In the MSYS2 shell, run: `pacman -S mingw-w64-x86_64-pango`
+3. Close MSYS2. In your normal terminal (where you run the backend), set the DLL path before starting the server:
+   ```bash
+   set WEASYPRINT_DLL_DIRECTORIES=C:\msys64\mingw64\bin
+   uvicorn app.main:app --reload
+   ```
+   (Adjust the path if MSYS2 is installed elsewhere.)
+4. Optionally add `WEASYPRINT_DLL_DIRECTORIES` to your `.env` (see `.env.example`).
+
+Without this, the app starts and all endpoints work except PDF export; calling export-pdf returns 503 with setup instructions. See [WeasyPrint — Windows](https://doc.courtbouillon.org/weasyprint/stable/first_steps.html#windows).
 
 ---
 
@@ -229,6 +245,8 @@ Upload audio, get PDF document.
 
 **Response:** `.pdf` file download (`meeting_summary_{lang}.pdf`)
 
+PDF export uses **WeasyPrint** (HTML → PDF) so that Hebrew, Arabic, English, French, and Spanish render correctly. Fonts (Heebo, Noto Sans Arabic, Noto Sans) can be placed in `app/assets/fonts/` for embedding; see `app/assets/fonts/README.md`. RTL is applied for Hebrew and Arabic via `dir="rtl"` and CSS.
+
 ---
 
 ## End-to-End Tests
@@ -274,10 +292,13 @@ backend/
 │   │   └── schemas.py        # Pydantic models
 │   ├── prompts/
 │   │   └── meeting_summary_prompt.txt
+│   ├── assets/
+│   │   └── fonts/                    # Optional: Heebo, Noto Sans (see README)
 │   ├── services/
 │   │   ├── transcription_service.py  # Whisper
 │   │   ├── summarization_service.py  # Claude
-│   │   └── document_service.py       # Word + PDF
+│   │   ├── document_service.py       # Word (.docx)
+│   │   └── pdf_service.py            # PDF (WeasyPrint: HTML → PDF)
 │   ├── utils/
 │   │   ├── file_utils.py      # Temp files, validation
 │   │   ├── document_labels.py # i18n for documents
@@ -303,7 +324,7 @@ openai>=2.15.0
 anthropic>=0.76.0
 python-multipart>=0.0.22
 python-docx>=1.2.0
-reportlab>=4.2.0
+weasyprint>=62.0
 ```
 
-See `requirements.txt` for full list.
+See `requirements.txt` for full list. **PDF export** uses WeasyPrint (HTML → PDF) so Hebrew and Arabic render correctly with embedded fonts; generation is handled by `pdf_service`.

@@ -1,8 +1,8 @@
 """
-Document generation service.
+Document generation service (Word only).
 
-Builds Word (.docx) and PDF documents from meeting transcript and analysis.
-Single source of content, multiple output formats.
+Builds Word (.docx) documents from meeting transcript and analysis.
+PDF export is handled by pdf_service (WeasyPrint: HTML → PDF).
 No AI usage; consumes transcript and AnalysisResult only.
 
 Features:
@@ -20,14 +20,6 @@ from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
-
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.units import inch
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.enums import TA_LEFT, TA_RIGHT, TA_CENTER
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, ListFlowable, ListItem
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
 
 from app.models.schemas import ActionItem, AnalysisResult
 from app.utils import file_utils
@@ -182,174 +174,6 @@ def generate_word_document(analysis: AnalysisResult, language: str = "en") -> st
     except Exception:
         file_utils.delete_temp_file(path)
         raise
-    return path
-
-
-# ============================================
-# PDF Document Generation
-# ============================================
-
-def _create_pdf_styles(rtl: bool = False) -> dict:
-    """Create PDF paragraph styles with RTL support if needed."""
-    styles = getSampleStyleSheet()
-    alignment = TA_RIGHT if rtl else TA_LEFT
-    
-    # Title style
-    styles.add(ParagraphStyle(
-        'DocTitle',
-        parent=styles['Heading1'],
-        fontSize=24,
-        spaceAfter=20,
-        alignment=TA_CENTER,
-        textColor='#4F46E5',  # Indigo
-    ))
-    
-    # Section heading style
-    styles.add(ParagraphStyle(
-        'SectionHeading',
-        parent=styles['Heading2'],
-        fontSize=14,
-        spaceBefore=16,
-        spaceAfter=8,
-        alignment=alignment,
-        textColor='#1F2937',
-    ))
-    
-    # Body text style
-    styles.add(ParagraphStyle(
-        'BodyText',
-        parent=styles['Normal'],
-        fontSize=11,
-        leading=16,
-        alignment=alignment,
-        textColor='#374151',
-    ))
-    
-    # List item style
-    styles.add(ParagraphStyle(
-        'ListItem',
-        parent=styles['Normal'],
-        fontSize=11,
-        leading=14,
-        alignment=alignment,
-        leftIndent=20,
-        textColor='#374151',
-    ))
-    
-    # Footer style
-    styles.add(ParagraphStyle(
-        'Footer',
-        parent=styles['Normal'],
-        fontSize=9,
-        alignment=TA_CENTER,
-        textColor='#9CA3AF',
-    ))
-    
-    return styles
-
-
-def generate_pdf_document(analysis: AnalysisResult, language: str = "en") -> str:
-    """
-    Build a PDF document from analysis with language-aware headings.
-
-    Uses analysis.translated_transcript for the Transcript section so the PDF
-    output matches the selected output language. Supports RTL for Hebrew and Arabic.
-
-    Args:
-        analysis: Structured analysis (summary, participants, decisions,
-            action_items, translated_transcript).
-        language: Output language code (en, he, fr, es, ar). Default en.
-
-    Returns:
-        Absolute path to the generated .pdf file. Caller is responsible for cleanup.
-
-    Raises:
-        OSError: If the temp file cannot be created or written.
-    """
-    labels = get_labels(language)
-    rtl = is_rtl(language)
-    styles = _create_pdf_styles(rtl)
-    
-    # Create temp file
-    fd, path = tempfile.mkstemp(suffix=".pdf")
-    os.close(fd)
-    
-    try:
-        # Create PDF document
-        doc = SimpleDocTemplate(
-            path,
-            pagesize=A4,
-            rightMargin=0.75 * inch,
-            leftMargin=0.75 * inch,
-            topMargin=0.75 * inch,
-            bottomMargin=0.75 * inch,
-        )
-        
-        story = []
-        
-        # Title
-        story.append(Paragraph(labels["title"], styles['DocTitle']))
-        story.append(Spacer(1, 12))
-        
-        # Summary section
-        story.append(Paragraph(labels["summary"], styles['SectionHeading']))
-        summary_text = (analysis.summary or "").strip() or f"({labels['none']})"
-        # Handle special characters in text
-        summary_text = summary_text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-        story.append(Paragraph(summary_text, styles['BodyText']))
-        story.append(Spacer(1, 8))
-        
-        # Transcript section
-        story.append(Paragraph(labels["transcript"], styles['SectionHeading']))
-        transcript_text = (analysis.translated_transcript or "").strip() or f"({labels['none']})"
-        # Escape HTML entities and handle newlines
-        transcript_text = transcript_text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-        transcript_text = transcript_text.replace('\n', '<br/>')
-        story.append(Paragraph(transcript_text, styles['BodyText']))
-        story.append(Spacer(1, 8))
-        
-        # Participants section
-        story.append(Paragraph(labels["participants"], styles['SectionHeading']))
-        if not analysis.participants:
-            story.append(Paragraph(labels["none"], styles['BodyText']))
-        else:
-            for p in analysis.participants:
-                p_escaped = p.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-                story.append(Paragraph(f"• {p_escaped}", styles['ListItem']))
-        story.append(Spacer(1, 8))
-        
-        # Decisions section
-        story.append(Paragraph(labels["decisions"], styles['SectionHeading']))
-        if not analysis.decisions:
-            story.append(Paragraph(labels["none"], styles['BodyText']))
-        else:
-            for d in analysis.decisions:
-                d_escaped = d.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-                story.append(Paragraph(f"• {d_escaped}", styles['ListItem']))
-        story.append(Spacer(1, 8))
-        
-        # Action Items section
-        story.append(Paragraph(labels["actions"], styles['SectionHeading']))
-        if not analysis.action_items:
-            story.append(Paragraph(labels["none"], styles['BodyText']))
-        else:
-            for item in analysis.action_items:
-                item_text = _format_action_item(item, labels)
-                item_escaped = item_text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-                story.append(Paragraph(f"• {item_escaped}", styles['ListItem']))
-        
-        # Footer
-        story.append(Spacer(1, 24))
-        footer_text = f"{labels['generated_by']} • {datetime.now().strftime('%Y-%m-%d')}"
-        story.append(Paragraph(footer_text, styles['Footer']))
-        
-        # Build PDF
-        doc.build(story)
-        
-    except Exception:
-        file_utils.delete_temp_file(path)
-        raise
-    
     return path
 
 

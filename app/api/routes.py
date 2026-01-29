@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse
 from app.config.settings import settings
 from app.db.models import Usage, UserPublic
 from app.models.schemas import APIResponse
-from app.services import document_service, summarization_service, transcription_service
+from app.services import document_service, pdf_service, summarization_service, transcription_service
 from app.services.auth_service import get_current_user
 from app.utils import file_utils
 
@@ -243,7 +243,7 @@ async def process_meeting_export_pdf(
     try:
         transcript = transcription_service.transcribe_audio(path)
         analysis = summarization_service.analyze_transcript(transcript, lang)
-        pdf_path = document_service.generate_pdf_document(analysis, lang)
+        pdf_path = pdf_service.generate_pdf_document(analysis, lang)
         background_tasks.add_task(file_utils.delete_temp_file, pdf_path)
         
         # Increment usage for authenticated users
