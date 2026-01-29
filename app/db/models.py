@@ -16,26 +16,13 @@ from .connection import get_database
 # ============================================
 # Pydantic Models
 # ============================================
-
-class PyObjectId(str):
-    """Custom type for MongoDB ObjectId."""
-    
-    @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
-    
-    @classmethod
-    def validate(cls, v):
-        if isinstance(v, ObjectId):
-            return str(v)
-        if isinstance(v, str) and ObjectId.is_valid(v):
-            return v
-        raise ValueError("Invalid ObjectId")
+# Use str for MongoDB _id in Pydantic models (we pass str(doc["_id"]) when building).
+# PyObjectId was removed to avoid Pydantic v2 validator signature mismatch.
 
 
 class UserInDB(BaseModel):
     """User document as stored in MongoDB."""
-    id: Optional[PyObjectId] = Field(default=None, alias="_id")
+    id: Optional[str] = Field(default=None, alias="_id")
     firstName: str
     lastName: str
     email: EmailStr
@@ -66,7 +53,7 @@ class ActionItemInDB(BaseModel):
 
 class MeetingInDB(BaseModel):
     """Meeting document as stored in MongoDB."""
-    id: Optional[PyObjectId] = Field(default=None, alias="_id")
+    id: Optional[str] = Field(default=None, alias="_id")
     userId: str
     fileName: str
     language: str
@@ -85,7 +72,7 @@ class MeetingInDB(BaseModel):
 
 class UsageInDB(BaseModel):
     """Usage tracking document."""
-    id: Optional[PyObjectId] = Field(default=None, alias="_id")
+    id: Optional[str] = Field(default=None, alias="_id")
     userId: str
     date: str  # "YYYY-MM-DD" format
     count: int = 0

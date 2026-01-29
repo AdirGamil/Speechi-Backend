@@ -68,11 +68,14 @@ class Settings(BaseSettings):
     
     @property
     def cors_origins_list(self) -> List[str]:
-        """Parse CORS origins string into a list. No wildcards allowed."""
-        if not self.cors_origins:
+        """
+        Parse CORS_ORIGINS env into a list. Never pass a raw string to allow_origins.
+        Example ENV: CORS_ORIGINS=http://localhost:5173,https://speechi.adirg.dev
+        """
+        if not self.cors_origins or not self.cors_origins.strip():
             return []
         origins = [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
-        # Filter out wildcards in production
+        # Never use wildcard with allow_credentials=True
         if self.is_production:
             origins = [o for o in origins if o != "*"]
         return origins
