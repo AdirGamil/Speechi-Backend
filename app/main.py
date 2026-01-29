@@ -33,16 +33,26 @@ async def lifespan(app: FastAPI):
     Application lifespan handler.
     Manages startup and shutdown events.
     """
-    print("=" * 50)
-    print("[Speechi API] Starting up...")
-    print(f"[Speechi API] Environment: {settings.app_env}")
-    print(f"[Speechi API] API prefix: {settings.normalized_api_prefix or '(root)'}")
-    print(f"[Speechi API] CORS origins: {settings.cors_origins_list}")
-    print(f"[Speechi API] Server: {settings.app_host}:{settings.app_port}")
+    logger.info("=" * 50)
+    logger.info("[Speechi API] Starting up...")
+    logger.info("[Speechi API] Environment: %s", settings.app_env)
+    logger.info("[Speechi API] API prefix: %s", settings.normalized_api_prefix or "(root)")
+    if not settings.is_production:
+        # Only log CORS origins in development (avoid leaking config in prod logs)
+        logger.info("[Speechi API] CORS origins: %s", settings.cors_origins_list)
+    logger.info("[Speechi API] Server: %s:%s", settings.app_host, settings.app_port)
+    
+    # Security check: fail fast if using default JWT secret in production
+    if settings.is_production and "CHANGE_ME" in settings.jwt_secret_key:
+        raise RuntimeError(
+            "CRITICAL: JWT_SECRET_KEY must be set to a secure value in production. "
+            "Generate one with: openssl rand -hex 32"
+        )
+    
     await init_db()
-    print("=" * 50)
+    logger.info("=" * 50)
     yield
-    print("[Speechi API] Shutting down...")
+    logger.info("[Speechi API] Shutting down...")
     await close_db()
 
 

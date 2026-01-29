@@ -5,11 +5,14 @@ Uses Motor for async MongoDB operations with FastAPI.
 Connection is lazily initialized and reused across requests.
 """
 
+import logging
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from typing import Optional
 
 from app.config.settings import settings
 
+
+logger = logging.getLogger("speechi.db")
 
 # Global client instance
 _client: Optional[AsyncIOMotorClient] = None
@@ -26,7 +29,7 @@ async def init_db() -> None:
     global _client, _database
     
     if not settings.mongodb_uri:
-        print("[DB] WARNING: MONGODB_URI not set, database features disabled")
+        logger.warning("[DB] MONGODB_URI not set, database features disabled")
         return
     
     try:
@@ -38,13 +41,13 @@ async def init_db() -> None:
         
         # Test connection
         await _client.admin.command("ping")
-        print(f"[DB] Connected to MongoDB: {settings.mongodb_db_name}")
+        logger.info("[DB] Connected to MongoDB: %s", settings.mongodb_db_name)
         
         # Create indexes
         await _create_indexes()
         
     except Exception as e:
-        print(f"[DB] ERROR: Failed to connect to MongoDB: {e}")
+        logger.error("[DB] Failed to connect to MongoDB: %s", e)
         _client = None
         _database = None
 
@@ -56,15 +59,15 @@ async def _create_indexes() -> None:
     
     # Users collection: unique email index
     await _database.users.create_index("email", unique=True)
-    print("[DB] Created index: users.email (unique)")
+    logger.debug("[DB] Created index: users.email (unique)")
     
     # Meetings collection: userId index for queries
     await _database.meetings.create_index("userId")
-    print("[DB] Created index: meetings.userId")
+    logger.debug("[DB] Created index: meetings.userId")
     
     # Usage collection: compound index for userId + date
     await _database.usage.create_index([("userId", 1), ("date", 1)], unique=True)
-    print("[DB] Created index: usage.userId_date (unique)")
+    logger.debug("[DB] Created index: usage.userId_date (unique)")
 
 
 async def close_db() -> None:
@@ -77,7 +80,7 @@ async def close_db() -> None:
     
     if _client:
         _client.close()
-        print("[DB] MongoDB connection closed")
+        logger.info("[DB] MongoDB connection closed")
     
     _client = None
     _database = None

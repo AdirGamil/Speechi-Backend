@@ -1,7 +1,8 @@
-# Environment and secrets
+# Environment and secrets (keep .env.example - it should be committed)
 .env
 .env.local
-.env.example
+.env.production
+.env.staging
 *.env.local
 
 # Python

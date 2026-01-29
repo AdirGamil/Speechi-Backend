@@ -271,12 +271,6 @@ curl -X POST -F "audio=@meeting.mp3" -F "language=ar" \
   --output meeting_summary_ar.pdf
 ```
 
-**Isolation tests** (no server):
-```bash
-python test_transcription.py <audio_file>
-python test_summarization.py
-```
-
 ---
 
 ## Project Structure

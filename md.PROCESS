@@ -147,18 +147,14 @@ The backend receives the `language` parameter and passes it to document generati
 
 - **Different roles:** Whisper is built for speech-to-text. Claude is built for reasoning and structured output. Using each for its strength keeps the pipeline simple and predictable.
 - **Easier debugging:** If the transcript is wrong, the bug is in transcription. If the summary is wrong or malformed, the bug is in summarization or the prompt. Mixed responsibilities would blur that line.
-- **Independent testing:** We can validate Whisper with `test_transcription.py` (audio → transcript only) and Claude with `test_summarization.py` (hardcoded transcript → JSON only). No need to run the full stack to verify one stage.
+- **Independent testing:** Each AI service can be tested in isolation without running the full stack.
 - **Operational flexibility:** Transcripts can be cached, re-summarized with different prompts, or fed into other tools without re-running Whisper. The split makes those options straightforward.
 
 ---
 
 ## Isolation testing before integration
 
-1. **`test_transcription.py`:** Accepts a local audio path, calls `transcription_service.transcribe_audio`, prints the transcript. No Claude, no FastAPI. Validates that Whisper runs correctly and that `OPENAI_API_KEY` and file handling behave as expected.
-
-2. **`test_summarization.py`:** Loads the system prompt from `app/prompts/meeting_summary_prompt.txt`, sends a hardcoded transcript to Claude, prints the raw response and parsed JSON. No audio, no Whisper. Validates that Claude returns valid JSON and that the prompt produces the desired structure.
-
-Only after both scripts ran successfully did we wire the full pipeline in `POST /api/process-meeting`. This caught issues (e.g. missing keys, bad paths, prompt drift) early and kept integration minimal.
+During development, each AI stage was validated independently before wiring the full pipeline. This caught issues (missing keys, bad paths, prompt drift) early and kept integration minimal. The test scripts have been removed from the production codebase, but the architecture supports easy re-creation if needed.
 
 ---
 
@@ -269,7 +265,7 @@ Export endpoints: same pipeline, then `document_service.generate_word_document` 
 | Ensuring Claude outputs valid JSON only | Strict prompt rules, no-markdown examples, and direct `json.loads` + Pydantic validation. |
 | Claude wrapping JSON in markdown code fences | Minimal `_extract_json` helper strips ` ```json ` / ` ``` ` markers if present, ensuring `json.loads` always receives clean input. Prompt discipline remains; guard handles edge cases. |
 | Keeping routes free of business logic | All AI and file logic in services/utils; routes only orchestrate and map errors. |
-| Validating each AI stage before integration | `test_transcription.py` and `test_summarization.py` exercise Whisper and Claude independently. |
+| Validating each AI stage before integration | Each AI service tested independently during development before wiring the full pipeline. |
 | Temp file cleanup on all paths | `try` / `finally` around transcribe + summarize; `delete_temp_file` always runs. |
 | Frontend-ready API responses | Clean JSON extraction ensures responses are parseable without preprocessing, suitable for React or other frontend frameworks. |
 | Language consistency | Prompt enforces "do not mix languages"; all output (summary, participants, decisions, action_items, translated_transcript) in target language. Routes validate `language` against allowed set. |
