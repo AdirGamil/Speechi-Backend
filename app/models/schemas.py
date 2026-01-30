@@ -51,27 +51,54 @@ class AnalysisResult(BaseModel):
     """True if translated_transcript is condensed due to transcript length."""
 
 
+class DecisionWithConfidence(BaseModel):
+    """A decision with confidence level for context-aware processing."""
+    
+    decision: str
+    """What was decided."""
+    
+    confidence: str = "medium"
+    """Confidence level: high, medium, or low."""
+
+
+class ActionItemWithDetails(BaseModel):
+    """An action item with full details for context-aware processing."""
+    
+    task: str
+    """What needs to be done."""
+    
+    owner: Optional[str] = None
+    """Person responsible."""
+    
+    due: Optional[str] = None
+    """Due date if specified."""
+
+
 class ChunkAnalysis(BaseModel):
     """
     Analysis result for a single transcript chunk (internal use).
     
-    Used during map-reduce processing of long transcripts.
+    Used during two-phase context-aware processing of long transcripts.
+    Contains only INCREMENTAL information not already in global context.
     """
 
-    chunk_summary: str
-    """Brief summary of this chunk's content."""
+    chunk_summary: str = ""
+    """1-2 sentence summary of this chunk's content."""
 
-    participants: list[str] = Field(default_factory=list)
-    """Participants mentioned in this chunk."""
+    new_participants: list[str] = Field(default_factory=list)
+    """Participants appearing for the FIRST TIME in this chunk."""
 
-    decisions: list[str] = Field(default_factory=list)
-    """Decisions identified in this chunk."""
+    decisions: list[DecisionWithConfidence] = Field(default_factory=list)
+    """New decisions identified in this chunk with confidence."""
 
-    action_items: list[ActionItem] = Field(default_factory=list)
-    """Action items from this chunk."""
+    action_items: list[ActionItemWithDetails] = Field(default_factory=list)
+    """New action items from this chunk."""
 
-    key_topics: list[str] = Field(default_factory=list)
-    """Key topics or themes in this chunk."""
+    topics: list[str] = Field(default_factory=list)
+    """Topics discussed in this chunk."""
+    
+    important_notes: list[str] = Field(default_factory=list)
+    """Corrections, clarifications, or reversals of earlier info."""
 
 
 class APIResponse(BaseModel):

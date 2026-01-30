@@ -32,7 +32,9 @@ Upload or record meeting audio; the system transcribes it with **OpenAI Whisper*
 
 1. **Whisper:** Audio → plain-text transcript (language-agnostic).
 2. **Claude:** Transcript + target language → summary, participants, decisions, action items, **translated_transcript** (all in chosen language).
-   - For long transcripts (>20k characters), uses **chunked map-reduce processing** for reliability.
+   - For long transcripts (>15k characters), uses **two-phase context-aware chunking**:
+     - **PHASE 1**: Each chunk analyzed with rolling global context, extracting only NEW information
+     - **PHASE 2**: Final synthesis with contradiction resolution and duplicate merging
    - Includes automatic JSON repair fallback if parsing fails.
 3. **Document export:** Uses `translated_transcript` and analysis; headings and content in selected language with RTL support. Exports include both clean/translated transcript and full original transcript.
 
