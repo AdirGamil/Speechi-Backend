@@ -26,6 +26,8 @@ ALLOWED_AUDIO_FORMATS: dict[str, list[str]] = {
     ".flac": ["audio/flac", "audio/x-flac"],
     ".webm": ["audio/webm", "video/webm"],  # webm can be audio-only
     ".mp4": ["video/mp4", "audio/mp4"],  # mp4 audio track
+    ".mpeg": ["audio/mpeg", "audio/mp3", "audio/x-mpeg", "video/mpeg"],  # MPEG audio
+    ".mpg": ["audio/mpeg", "audio/mp3", "audio/x-mpeg", "video/mpeg"],  # MPEG shorthand
 }
 
 # Flat set of allowed extensions for quick lookup
@@ -118,9 +120,15 @@ def suffix_from_filename(filename: str) -> str:
     """
     Extract file extension from filename for temp file naming.
 
+    Normalizes MPEG variants (.mpg) to .mpeg for consistency.
+
     Returns:
         Extension including leading dot (e.g. .mp3), or .mp3 if none.
     """
     if not filename or "." not in filename:
         return ".mp3"
-    return "." + filename.rsplit(".", 1)[-1].lower()
+    ext = "." + filename.rsplit(".", 1)[-1].lower()
+    # Normalize .mpg to .mpeg for downstream tools
+    if ext == ".mpg":
+        return ".mpeg"
+    return ext

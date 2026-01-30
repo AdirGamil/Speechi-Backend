@@ -67,6 +67,7 @@ def _build_html_document(analysis: AnalysisResult, language: str) -> str:
     """
     Build semantic HTML for the meeting summary.
     Uses language-aware headings from document_labels. RTL for he/ar.
+    Includes both clean/translated transcript and original transcript.
     """
     labels = get_labels(language)
     rtl = is_rtl(language)
@@ -78,7 +79,14 @@ def _build_html_document(analysis: AnalysisResult, language: str) -> str:
 
     title_esc = _escape(labels["title"])
     summary_heading = _escape(labels["summary"])
-    transcript_heading = _escape(labels["transcript"])
+    
+    # Clean transcript heading with condensed note if applicable
+    clean_transcript_label = labels["clean_transcript"]
+    if getattr(analysis, "is_condensed", False):
+        clean_transcript_label += f" {labels['condensed_note']}"
+    clean_transcript_heading = _escape(clean_transcript_label)
+    
+    original_transcript_heading = _escape(labels["original_transcript"])
     participants_heading = _escape(labels["participants"])
     decisions_heading = _escape(labels["decisions"])
     actions_heading = _escape(labels["actions"])
@@ -89,8 +97,14 @@ def _build_html_document(analysis: AnalysisResult, language: str) -> str:
     summary_text = (analysis.summary or "").strip() or none_esc
     summary_esc = _escape(summary_text)
 
+    # Clean/translated transcript
     transcript_text = (analysis.translated_transcript or "").strip() or none_esc
     transcript_esc = _escape(transcript_text).replace("\n", "<br>")
+
+    # Original transcript (raw Whisper output)
+    raw_transcript = getattr(analysis, "raw_transcript", "") or ""
+    raw_transcript_text = raw_transcript.strip()
+    raw_transcript_esc = _escape(raw_transcript_text).replace("\n", "<br>") if raw_transcript_text else ""
 
     # Participants list
     if analysis.participants:
@@ -119,6 +133,15 @@ def _build_html_document(analysis: AnalysisResult, language: str) -> str:
         actions_body = f"<ul>{action_items_li}</ul>"
     else:
         actions_body = f"<p>{none_esc}</p>"
+
+    # Build original transcript section HTML (only if we have content)
+    original_transcript_section = ""
+    if raw_transcript_esc:
+        original_transcript_section = f"""
+<section>
+<h2>{original_transcript_heading}</h2>
+<p>{raw_transcript_esc}</p>
+</section>"""
 
     html_content = f"""<!DOCTYPE html>
 <html lang="{language}" dir="{dir_attr}">
@@ -193,9 +216,9 @@ footer {{
 <p>{summary_esc}</p>
 </section>
 <section>
-<h2>{transcript_heading}</h2>
+<h2>{clean_transcript_heading}</h2>
 <p>{transcript_esc}</p>
-</section>
+</section>{original_transcript_section}
 <section>
 <h2>{participants_heading}</h2>
 {participants_body}

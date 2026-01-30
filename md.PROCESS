@@ -30,6 +30,7 @@ The system accepts all common professional audio formats:
 | FLAC | `.flac` | Lossless compression |
 | WebM | `.webm` | Browser recordings |
 | MP4 | `.mp4` | Video format, audio track extracted |
+| MPEG | `.mpeg`, `.mpg` | Legacy MPEG audio/video format |
 
 ### Upload vs Recording
 
@@ -79,6 +80,74 @@ Whisper handles transcription only. It does not:
 - Generate summaries
 
 This keeps the transcription stage focused and predictable.
+
+---
+
+## Long Transcript Handling (Chunked Processing)
+
+### The Problem
+
+Long recordings (up to 2+ hours) produce transcripts that can exceed model context limits or cause Claude to generate malformed JSON (unterminated strings, truncated output). This manifests as `ValueError: Claude response is not valid JSON: Unterminated string...`.
+
+### Solution: Map-Reduce Chunking
+
+For transcripts exceeding ~20,000 characters, the system uses a **chunked map-reduce** approach:
+
+```
+Long transcript (>20k chars)
+    │
+    ├── Split into chunks (~12k chars each, with 400-char overlap)
+    │
+    ├── MAP: Analyze each chunk independently
+    │   ├── Chunk 1 → ChunkAnalysis (summary, participants, decisions, action_items, topics)
+    │   ├── Chunk 2 → ChunkAnalysis
+    │   └── Chunk N → ChunkAnalysis
+    │
+    └── REDUCE: Merge all ChunkAnalysis into final AnalysisResult
+        ├── Synthesize overall summary
+        ├── Deduplicate participants
+        ├── Merge decisions (remove duplicates)
+        ├── Merge action items (semantic deduplication)
+        └── Generate condensed clean transcript
+```
+
+### Chunking Strategy
+
+The `split_transcript()` function:
+1. Splits on paragraph boundaries (`\n\n`) when possible
+2. Falls back to single newlines, then sentence endings, then word boundaries
+3. Never splits in the middle of a word
+4. Maintains 400-character overlap between chunks for context preservation
+
+### Output Schema Changes
+
+The `AnalysisResult` schema now includes:
+- `raw_transcript`: Always contains the full original Whisper output (never condensed)
+- `is_condensed`: Boolean flag indicating if `translated_transcript` was condensed
+- `language`: The output language code used
+
+For long recordings, `translated_transcript` becomes a **condensed clean transcript** (structured narrative summary) rather than a full translation. Users can always access the full text via `raw_transcript`.
+
+### JSON Repair Fallback
+
+If initial JSON parsing fails, the system attempts automatic repair:
+
+1. **Parse attempt 1**: Direct `json.loads`
+2. **Parse attempt 2**: Extract JSON from markdown fences, fix trailing commas, escape newlines
+3. **Parse attempt 3**: Call Claude with a "JSON repair" prompt to fix malformed output
+4. **Final fallback**: Raise `ValueError` with diagnostic information
+
+This multi-stage approach ensures reliable JSON output even when Claude produces formatting issues.
+
+### Why Chunking Instead of Context Window Expansion
+
+1. **Determinism**: Smaller chunks produce more consistent, predictable output
+2. **Cost efficiency**: Processing in chunks is more cost-effective than extended context
+3. **Error isolation**: If one chunk fails, others can still succeed
+4. **Parallelization potential**: Chunks could be processed in parallel (future optimization)
+5. **Quality**: Focused analysis on smaller segments often produces better extraction
+
+---
 
 ---
 
@@ -218,14 +287,17 @@ End-to-end flow:
 
 This implementation goes beyond the basic requirements:
 
-1. **Professional audio format support** — 8 formats instead of just MP3/WAV.
-2. **Browser recording** — Users can record directly without external software.
-3. **Dual export formats** — Both Word and PDF with identical content.
-4. **Full i18n** — 5 languages with complete RTL support.
-5. **Language-aware documents** — Headings, labels, and text direction adapt to selected language.
-6. **Clean architecture** — Single content source, multiple output formats.
-7. **Input validation** — Extension and MIME type checking with clear error messages.
-8. **Language-aware filenames** — `meeting_summary_he.docx` instead of generic names.
+1. **Professional audio format support** — 9 formats including MPEG.
+2. **Long recording support** — Handles 2+ hour recordings via chunked processing.
+3. **Browser recording** — Users can record directly without external software.
+4. **Dual export formats** — Both Word and PDF with identical content.
+5. **Full i18n** — 5 languages with complete RTL support.
+6. **Language-aware documents** — Headings, labels, and text direction adapt to selected language.
+7. **Clean architecture** — Single content source, multiple output formats.
+8. **Input validation** — Extension and MIME type checking with clear error messages.
+9. **Language-aware filenames** — `meeting_summary_he.docx` instead of generic names.
+10. **Robust JSON parsing** — Multi-stage repair with Claude fallback for reliability.
+11. **Dual transcript output** — Both condensed/translated and full original transcripts.
 
 ---
 
@@ -250,6 +322,8 @@ Export endpoints: same pipeline, then `document_service.generate_word_document` 
 
 - **JSON enforcement:** Getting Claude to output *only* valid JSON, with no markdown or extra text, so the API can parse and validate reliably.
 - **Markdown-wrapped responses:** Claude occasionally wraps JSON in ` ```json ... ``` ` despite instructions, breaking `json.loads`.
+- **Long transcript failures:** 2-hour recordings cause Claude to produce truncated/malformed JSON due to context limits.
+- **MPEG format support:** Some clients send `video/mpeg` MIME type for audio files, requiring flexible validation.
 - **Isolation testing:** Validating Whisper and Claude independently before wiring the full pipeline, without running the full stack for each stage.
 - **Language consistency:** Ensuring summary, extracted fields, and translated transcript are all in the selected output language, with no mixed-language leakage.
 - **Separation of concerns:** Keeping transcription, summarization/translation, and document export in distinct services; no AI or file logic in routes.
@@ -262,17 +336,20 @@ Export endpoints: same pipeline, then `document_service.generate_word_document` 
 
 | Challenge | Solution |
 |-----------|----------|
-| Ensuring Claude outputs valid JSON only | Strict prompt rules, no-markdown examples, and direct `json.loads` + Pydantic validation. |
+| Ensuring Claude outputs valid JSON only | Strict prompt rules with explicit JSON formatting instructions, no-markdown examples, and direct `json.loads` + Pydantic validation. |
 | Claude wrapping JSON in markdown code fences | Minimal `_extract_json` helper strips ` ```json ` / ` ``` ` markers if present, ensuring `json.loads` always receives clean input. Prompt discipline remains; guard handles edge cases. |
+| Long transcript failures (2+ hours) | Map-reduce chunking: split transcript into ~12k char chunks, analyze each independently, merge results. Includes automatic JSON repair via Claude fallback. |
+| MPEG format support | Added `.mpeg` and `.mpg` extensions with `audio/mpeg`, `audio/x-mpeg`, and `video/mpeg` MIME types to `ALLOWED_AUDIO_FORMATS`. |
 | Keeping routes free of business logic | All AI and file logic in services/utils; routes only orchestrate and map errors. |
 | Validating each AI stage before integration | Each AI service tested independently during development before wiring the full pipeline. |
 | Temp file cleanup on all paths | `try` / `finally` around transcribe + summarize; `delete_temp_file` always runs. |
 | Frontend-ready API responses | Clean JSON extraction ensures responses are parseable without preprocessing, suitable for React or other frontend frameworks. |
 | Language consistency | Prompt enforces "do not mix languages"; all output (summary, participants, decisions, action_items, translated_transcript) in target language. Routes validate `language` against allowed set. |
-| Separation of concerns | AI only in services; routes validate input, orchestrate, map errors. Document service consumes `AnalysisResult` only, uses `translated_transcript` for documents. |
+| Separation of concerns | AI only in services; routes validate input, orchestrate, map errors. Document service consumes `AnalysisResult` only, uses both `translated_transcript` and `raw_transcript` for documents. |
 | RTL document formatting | `document_labels.py` provides `is_rtl()` helper; document generators apply RTL paragraph direction and right alignment. |
-| Multiple audio formats | Centralized `ALLOWED_AUDIO_FORMATS` in `file_utils.py`; validation checks both extension and MIME type. |
+| Multiple audio formats | Centralized `ALLOWED_AUDIO_FORMATS` in `file_utils.py`; validation checks both extension and MIME type. Now includes 9 formats. |
 | Browser recording | Frontend uses MediaRecorder API; output treated identically to uploads (same API endpoint). |
+| JSON repair for malformed output | Three-stage repair: direct parse → fence stripping + character fixes → Claude repair prompt. Ensures reliable JSON even with LLM formatting issues. |
 
 ---
 

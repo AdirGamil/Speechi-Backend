@@ -28,6 +28,27 @@ Your responsibilities:
 
 6. **Do not mix languages.** All output fields (summary, participants, decisions, action_items, translated_transcript) must be in the target output language only.
 
+## CRITICAL JSON Formatting Rules
+
+Follow these rules EXACTLY to ensure valid JSON output:
+
+1. **Escape all newlines.** Any newline inside a JSON string value MUST be written as the two-character sequence \n (backslash followed by n). NEVER include a literal line break inside a string.
+
+2. **Escape all quotes.** Any double quote inside a string value MUST be escaped as \" (backslash followed by quote).
+
+3. **Use double quotes only.** JSON requires double quotes for all keys and string values. Never use single quotes.
+
+4. **No trailing commas.** Do not put a comma after the last item in arrays or objects.
+
+5. **Keep strings short.** For translated_transcript, use \n\n to separate paragraphs/speakers. Do not include extremely long unbroken text.
+
+6. **No special characters.** Avoid tabs (\t), carriage returns (\r), or other control characters. Use spaces and \n only.
+
+7. **Simple structure.** Do not nest deeply. Keep action_items flat with description and owner only.
+
+8. **When uncertain, be minimal.** If you cannot produce valid JSON, output this minimal valid response:
+   {"summary":"Analysis failed.","participants":[],"decisions":[],"action_items":[],"translated_transcript":""}
+
 ## Output schema
 
 Output a JSON object with exactly these keys:
@@ -36,14 +57,14 @@ Output a JSON object with exactly these keys:
 - **participants** (array of strings): Names or identifiers who clearly participated. Empty array if none. In target language.
 - **decisions** (array of strings): Clearly stated or agreed decisions. One short phrase per item. Empty array if none. In target language.
 - **action_items** (array of objects): Each has **description** (string) and **owner** (string or null). In target language.
-- **translated_transcript** (string): The full meeting transcript, translated and cleaned, in the target language.
+- **translated_transcript** (string): The full meeting transcript, translated and cleaned, in the target language. Use \n\n between paragraphs.
 
 ## Example (sufficient transcript, target en)
 
-{"summary": "Team discussed Q1 targets and assigned follow-ups.", "participants": ["Alice", "Bob"], "decisions": ["Launch delayed to March.", "Budget approved."], "action_items": [{"description": "Send revised timeline to clients.", "owner": "Alice"}, {"description": "Update project tracker.", "owner": null}], "translated_transcript": "Alice: Let's push the launch to March. Bob: I'll update the timeline. ..."}
+{"summary":"Team discussed Q1 targets and assigned follow-ups.","participants":["Alice","Bob"],"decisions":["Launch delayed to March.","Budget approved."],"action_items":[{"description":"Send revised timeline to clients.","owner":"Alice"},{"description":"Update project tracker.","owner":null}],"translated_transcript":"Alice: Let's push the launch to March.\n\nBob: I'll update the timeline."}
 
 ## Example (insufficient transcript, target he)
 
-{"summary": "Transcript too short or unclear to summarize.", "participants": [], "decisions": [], "action_items": [], "translated_transcript": "התמליל המקורי מתורגם לעברית כפי שהוא."}
+{"summary":"התמליל קצר מדי או לא ברור לסיכום.","participants":[],"decisions":[],"action_items":[],"translated_transcript":"התמליל המקורי מתורגם לעברית כפי שהוא."}
 
-Respond with only the JSON object, nothing else.
+Respond with only the JSON object, nothing else. Do not wrap in markdown code blocks.

@@ -50,12 +50,13 @@ def generate_word_document(analysis: AnalysisResult, language: str = "en") -> st
     """
     Build a Word document from analysis with language-aware headings.
 
-    Uses analysis.translated_transcript for the Transcript section so the Word
-    output matches the selected output language. Supports RTL for Hebrew and Arabic.
+    Includes both clean/translated transcript and original transcript.
+    For long recordings, the clean transcript may be condensed while the
+    original transcript is always complete.
 
     Args:
         analysis: Structured analysis (summary, participants, decisions,
-            action_items, translated_transcript).
+            action_items, translated_transcript, raw_transcript).
         language: Output language code (en, he, fr, es, ar). Default en.
 
     Returns:
@@ -92,8 +93,12 @@ def generate_word_document(analysis: AnalysisResult, language: str = "en") -> st
         para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
         _set_rtl_paragraph(para)
 
-    # Transcript section
-    heading = doc.add_heading(labels["transcript"], level=1)
+    # Clean Transcript section (translated/condensed)
+    transcript_label = labels["clean_transcript"]
+    if getattr(analysis, "is_condensed", False):
+        transcript_label += f" {labels['condensed_note']}"
+    
+    heading = doc.add_heading(transcript_label, level=1)
     if rtl:
         heading.alignment = WD_ALIGN_PARAGRAPH.RIGHT
         _set_rtl_paragraph(heading)
@@ -103,6 +108,19 @@ def generate_word_document(analysis: AnalysisResult, language: str = "en") -> st
     if rtl:
         para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
         _set_rtl_paragraph(para)
+
+    # Original Transcript section (raw Whisper output)
+    raw_transcript = getattr(analysis, "raw_transcript", "") or ""
+    if raw_transcript.strip():
+        heading = doc.add_heading(labels["original_transcript"], level=1)
+        if rtl:
+            heading.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            _set_rtl_paragraph(heading)
+        
+        para = doc.add_paragraph(raw_transcript.strip())
+        if rtl:
+            para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            _set_rtl_paragraph(para)
 
     # Participants section
     heading = doc.add_heading(labels["participants"], level=1)

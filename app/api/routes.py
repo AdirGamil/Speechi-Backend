@@ -120,8 +120,12 @@ async def process_meeting(
     """
     Upload audio → transcribe (Whisper) → analyze (Claude) → return transcript + analysis.
 
-    Supported formats: MP3, WAV, M4A, AAC, OGG, FLAC, WEBM, MP4
+    Supported formats: MP3, WAV, M4A, AAC, OGG, FLAC, WEBM, MP4, MPEG
     language: Output language ISO code (he, en, fr, es, ar). Default en.
+    
+    For long recordings (up to 2 hours), the system uses chunked processing.
+    The raw_transcript in analysis always contains the full original transcript.
+    The translated_transcript may be condensed for very long recordings.
     
     Usage tracking:
     - Authenticated users: usage tracked in database
@@ -145,6 +149,7 @@ async def process_meeting(
         # Increment usage for authenticated users
         await _increment_usage(user)
         
+        # Return transcript for backward compatibility; analysis.raw_transcript is source of truth
         return APIResponse(transcript=transcript, analysis=analysis)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -164,11 +169,14 @@ async def process_meeting_export_docx(
     """
     E2E: upload audio → transcribe → analyze → generate .docx → return file.
 
-    Supported formats: MP3, WAV, M4A, AAC, OGG, FLAC, WEBM, MP4
+    Supported formats: MP3, WAV, M4A, AAC, OGG, FLAC, WEBM, MP4, MPEG
     language: Output language ISO code (he, en, fr, es, ar). Default en.
     
     Document headings and content are in the selected language.
     RTL support for Hebrew and Arabic.
+    
+    For long recordings, includes both clean (possibly condensed) transcript
+    and the full original transcript.
     """
     lang = _validate_request(audio, language)
     
@@ -221,12 +229,15 @@ async def process_meeting_export_pdf(
     """
     E2E: upload audio → transcribe → analyze → generate .pdf → return file.
 
-    Supported formats: MP3, WAV, M4A, AAC, OGG, FLAC, WEBM, MP4
+    Supported formats: MP3, WAV, M4A, AAC, OGG, FLAC, WEBM, MP4, MPEG
     language: Output language ISO code (he, en, fr, es, ar). Default en.
     
     Document headings and content are in the selected language.
     RTL support for Hebrew and Arabic.
     Clean typography with professional styling.
+    
+    For long recordings, includes both clean (possibly condensed) transcript
+    and the full original transcript.
     """
     lang = _validate_request(audio, language)
     

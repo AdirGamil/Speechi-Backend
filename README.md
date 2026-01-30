@@ -8,12 +8,14 @@ Upload or record meeting audio; the system transcribes it with **OpenAI Whisper*
 
 ## Features
 
-- **Multi-format audio support** — MP3, WAV, M4A, AAC, OGG, FLAC, WebM, MP4
+- **Multi-format audio support** — MP3, WAV, M4A, AAC, OGG, FLAC, WebM, MP4, MPEG
+- **Long recording support** — Handles recordings up to 2+ hours with chunked processing
 - **Browser recording** — Record directly from the frontend (WebM/WAV)
 - **5 output languages** — English, Hebrew, French, Spanish, Arabic
 - **Word & PDF export** — Professional documents with localized headings. PDF uses **WeasyPrint** (HTML → PDF) so Hebrew, Arabic, and Latin scripts render correctly with embedded fonts (no ■■■■ squares).
 - **RTL support** — Proper right-to-left formatting for Hebrew and Arabic
 - **Language-aware filenames** — `meeting_summary_he.docx`
+- **Robust JSON parsing** — Automatic JSON repair for reliable AI output
 - **Environment-based configuration** — Production-ready with env vars
 
 ---
@@ -30,7 +32,9 @@ Upload or record meeting audio; the system transcribes it with **OpenAI Whisper*
 
 1. **Whisper:** Audio → plain-text transcript (language-agnostic).
 2. **Claude:** Transcript + target language → summary, participants, decisions, action items, **translated_transcript** (all in chosen language).
-3. **Document export:** Uses `translated_transcript` and analysis; headings and content in selected language with RTL support.
+   - For long transcripts (>20k characters), uses **chunked map-reduce processing** for reliability.
+   - Includes automatic JSON repair fallback if parsing fails.
+3. **Document export:** Uses `translated_transcript` and analysis; headings and content in selected language with RTL support. Exports include both clean/translated transcript and full original transcript.
 
 ---
 
@@ -46,6 +50,7 @@ Upload or record meeting audio; the system transcribes it with **OpenAI Whisper*
 | FLAC | `.flac` | Lossless compression |
 | WebM | `.webm` | Browser recordings |
 | MP4 | `.mp4` | Video format (audio track) |
+| MPEG | `.mpeg`, `.mpg` | Legacy MPEG audio/video |
 
 ---
 
@@ -226,10 +231,19 @@ Upload audio, get JSON analysis.
     "action_items": [
       {"description": "Task description", "owner": "Person A"}
     ],
-    "translated_transcript": "Clean transcript in selected language..."
+    "translated_transcript": "Clean transcript in selected language...",
+    "raw_transcript": "Original Whisper transcript (always full)...",
+    "language": "en",
+    "is_condensed": false
   }
 }
 ```
+
+**Long recording handling:**
+- For recordings over ~20k characters of transcript, the system uses chunked processing.
+- `raw_transcript` always contains the full original Whisper output.
+- `translated_transcript` may be condensed for very long recordings (indicated by `is_condensed: true`).
+- Processing time scales with recording length; 2-hour recordings may take a few minutes.
 
 ### `POST /api/process-meeting/export-docx`
 Upload audio, get Word document.

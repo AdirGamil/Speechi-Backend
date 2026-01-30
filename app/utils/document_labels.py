@@ -12,6 +12,9 @@ class DocumentLabels(TypedDict):
     """Document section labels in a specific language."""
     title: str
     transcript: str
+    clean_transcript: str
+    original_transcript: str
+    condensed_note: str
     summary: str
     participants: str
     decisions: str
@@ -36,6 +39,9 @@ DOCUMENT_LABELS: dict[str, DocumentLabels] = {
     "en": {
         "title": "Meeting Summary",
         "transcript": "Transcript",
+        "clean_transcript": "Clean Transcript",
+        "original_transcript": "Original Transcript",
+        "condensed_note": "(Condensed view - full transcript below)",
         "summary": "Summary",
         "participants": "Participants",
         "decisions": "Decisions",
@@ -48,6 +54,9 @@ DOCUMENT_LABELS: dict[str, DocumentLabels] = {
     "he": {
         "title": "סיכום פגישה",
         "transcript": "תמלול",
+        "clean_transcript": "תמלול מעובד",
+        "original_transcript": "תמלול מקורי",
+        "condensed_note": "(תצוגה מקוצרת - תמלול מלא למטה)",
         "summary": "תקציר",
         "participants": "משתתפים",
         "decisions": "החלטות",
@@ -60,6 +69,9 @@ DOCUMENT_LABELS: dict[str, DocumentLabels] = {
     "fr": {
         "title": "Résumé de réunion",
         "transcript": "Transcription",
+        "clean_transcript": "Transcription nettoyée",
+        "original_transcript": "Transcription originale",
+        "condensed_note": "(Vue condensée - transcription complète ci-dessous)",
         "summary": "Résumé",
         "participants": "Participants",
         "decisions": "Décisions",
@@ -72,6 +84,9 @@ DOCUMENT_LABELS: dict[str, DocumentLabels] = {
     "es": {
         "title": "Resumen de reunión",
         "transcript": "Transcripción",
+        "clean_transcript": "Transcripción limpia",
+        "original_transcript": "Transcripción original",
+        "condensed_note": "(Vista condensada - transcripción completa abajo)",
         "summary": "Resumen",
         "participants": "Participantes",
         "decisions": "Decisiones",
@@ -84,6 +99,9 @@ DOCUMENT_LABELS: dict[str, DocumentLabels] = {
     "ar": {
         "title": "ملخص الاجتماع",
         "transcript": "النص",
+        "clean_transcript": "النص المنظف",
+        "original_transcript": "النص الأصلي",
+        "condensed_note": "(عرض مختصر - النص الكامل أدناه)",
         "summary": "الملخص",
         "participants": "المشاركون",
         "decisions": "القرارات",
