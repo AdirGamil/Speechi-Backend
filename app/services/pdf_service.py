@@ -218,7 +218,7 @@ footer {{
 <section>
 <h2>{clean_transcript_heading}</h2>
 <p>{transcript_esc}</p>
-</section>{original_transcript_section}
+</section>
 <section>
 <h2>{participants_heading}</h2>
 {participants_body}
@@ -230,7 +230,7 @@ footer {{
 <section>
 <h2>{actions_heading}</h2>
 {actions_body}
-</section>
+</section>{original_transcript_section}
 </main>
 <footer>{generated_esc} · {date_str}</footer>
 </body>

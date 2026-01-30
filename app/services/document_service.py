@@ -109,19 +109,6 @@ def generate_word_document(analysis: AnalysisResult, language: str = "en") -> st
         para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
         _set_rtl_paragraph(para)
 
-    # Original Transcript section (raw Whisper output)
-    raw_transcript = getattr(analysis, "raw_transcript", "") or ""
-    if raw_transcript.strip():
-        heading = doc.add_heading(labels["original_transcript"], level=1)
-        if rtl:
-            heading.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-            _set_rtl_paragraph(heading)
-        
-        para = doc.add_paragraph(raw_transcript.strip())
-        if rtl:
-            para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-            _set_rtl_paragraph(para)
-
     # Participants section
     heading = doc.add_heading(labels["participants"], level=1)
     if rtl:
@@ -175,6 +162,19 @@ def generate_word_document(analysis: AnalysisResult, language: str = "en") -> st
             if rtl:
                 para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
                 _set_rtl_paragraph(para)
+
+    # Original Transcript section (raw Whisper output) - at the end
+    raw_transcript = getattr(analysis, "raw_transcript", "") or ""
+    if raw_transcript.strip():
+        heading = doc.add_heading(labels["original_transcript"], level=1)
+        if rtl:
+            heading.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            _set_rtl_paragraph(heading)
+        
+        para = doc.add_paragraph(raw_transcript.strip())
+        if rtl:
+            para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            _set_rtl_paragraph(para)
 
     # Footer
     doc.add_paragraph()  # Spacer
